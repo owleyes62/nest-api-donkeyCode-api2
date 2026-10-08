@@ -20,11 +20,13 @@ import { AlunosModule } from './modules/alunos/alunos.module';
 import { ResumoIaModule } from './modules/resumo-ia/resumo-ia.module';
 
 import { JwtAuthGuard } from './core/auth/jwt-auth.guard';
+import { RecaptchaModule } from './core/recaptcha';
 import { HttpErrorFilter } from './core/http-exception.filter';
 import { loginLimiter } from './core/rate-limit';
 
 @Module({
   imports: [
+    RecaptchaModule,
     UsersModule,
     AuthModule,
     InstitutionsModule,

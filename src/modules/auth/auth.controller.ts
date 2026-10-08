@@ -1,4 +1,12 @@
-import { BadRequestException, Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  HttpCode,
+  HttpStatus,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBody,
@@ -11,6 +19,7 @@ import {
 
 import { AuthService } from '../../services/auth.service';
 import { Public } from '../../core/auth/public.decorator';
+import { Recaptcha, RecaptchaGuard } from '../../core/recaptcha';
 import { errorSchema } from '../../swagger/decorators';
 
 const tokensSchema = {
@@ -31,10 +40,16 @@ export class AuthController {
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  // Duas barreiras contra automação: o rate limit segura a força bruta por IP,
+  // o captcha barra o bot antes de a senha ser conferida.
+  @Recaptcha('login')
+  @UseGuards(RecaptchaGuard)
   @ApiOperation({
     summary: 'Autentica e devolve o par de tokens',
     description:
-      'Rota pública, protegida por rate limit: 10 tentativas por IP a cada 15 minutos.',
+      'Rota pública, protegida por rate limit (10 tentativas por IP a cada 15 minutos) ' +
+      'e por reCAPTCHA. O token do captcha é verificado no Google e descartado — ' +
+      'nada é gravado no banco.',
   })
   @ApiBody({
     schema: {
@@ -43,11 +58,22 @@ export class AuthController {
       properties: {
         email: { type: 'string', format: 'email', example: 'aluno@unicap.br' },
         password: { type: 'string', format: 'password', example: 'senha123' },
+        recaptchaToken: {
+          type: 'string',
+          description:
+            'Token do reCAPTCHA gerado no front. Obrigatório quando RECAPTCHA_SECRET ' +
+            'está configurado no servidor. Aceita também os nomes captchaToken e recaptcha.',
+        },
       },
     },
   })
   @ApiOkResponse({ description: 'Login efetuado', schema: tokensSchema })
-  @ApiBadRequestResponse({ schema: errorSchema('Email and password are required') })
+  @ApiBadRequestResponse({
+    description:
+      'Inclui as falhas de captcha: CAPTCHA_AUSENTE, CAPTCHA_INVALIDO, ' +
+      'CAPTCHA_EXPIRADO (token reusado) e CAPTCHA_SCORE_BAIXO (v3).',
+    schema: errorSchema('Captcha inválido', 'CAPTCHA_INVALIDO'),
+  })
   @ApiUnauthorizedResponse({ schema: errorSchema('Invalid credentials') })
   @ApiTooManyRequestsResponse({
     schema: errorSchema('Muitas tentativas de login. Tente novamente em 15 minutos.'),

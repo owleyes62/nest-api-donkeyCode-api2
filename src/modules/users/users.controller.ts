@@ -7,6 +7,7 @@ import {
   Post,
   Put,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -24,6 +25,7 @@ import {
 
 import { UserService } from '../../services/user.service';
 import { Public } from '../../core/auth/public.decorator';
+import { Recaptcha, RecaptchaGuard } from '../../core/recaptcha';
 import { ApiAuth, errorSchema } from '../../swagger/decorators';
 import { uploadOptions } from '../../core/upload.config';
 import { persistUploadedFile } from '../../core/storage';
@@ -51,9 +53,14 @@ export class UsersController {
   // login/refresh/logout ficam no AuthController.
   @Public()
   @Post()
+  // Rota aberta: sem captcha, qualquer script cria contas em massa.
+  @Recaptcha('cadastro')
+  @UseGuards(RecaptchaGuard)
   @ApiOperation({
     summary: 'Cria um usuário',
-    description: 'Rota pública. A senha é gravada com hash argon2.',
+    description:
+      'Rota pública, protegida por reCAPTCHA. A senha é gravada com hash argon2. ' +
+      'O token do captcha é verificado no Google e descartado — nada é gravado no banco.',
   })
   @ApiBody({
     schema: {
@@ -65,6 +72,12 @@ export class UsersController {
         password: { type: 'string', format: 'password', example: 'senha123' },
         role: { type: 'string', enum: ['aluno', 'professor', 'admin'], default: 'aluno' },
         institutionId: { type: 'string', format: 'uuid' },
+        recaptchaToken: {
+          type: 'string',
+          description:
+            'Token do reCAPTCHA gerado no front. Obrigatório quando RECAPTCHA_SECRET ' +
+            'está configurado no servidor. Aceita também os nomes captchaToken e recaptcha.',
+        },
       },
     },
   })
@@ -74,7 +87,12 @@ export class UsersController {
       properties: { message: { type: 'string', example: 'created successfully' } },
     },
   })
-  @ApiBadRequestResponse({ schema: errorSchema('Name, email and password are required') })
+  @ApiBadRequestResponse({
+    description:
+      'Inclui as falhas de captcha: CAPTCHA_AUSENTE, CAPTCHA_INVALIDO, ' +
+      'CAPTCHA_EXPIRADO (token reusado) e CAPTCHA_SCORE_BAIXO (v3).',
+    schema: errorSchema('Captcha inválido', 'CAPTCHA_INVALIDO'),
+  })
   async create(@Body() body: any) {
     await this.userService.create(body);
     return { message: 'created successfully' };
