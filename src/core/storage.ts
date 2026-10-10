@@ -8,7 +8,39 @@ import { UPLOAD_DIR } from './upload.config';
 const logger = new Logger('Storage');
 
 const NA_VERCEL = !!process.env.VERCEL;
-const TEM_TOKEN_BLOB = !!process.env.BLOB_READ_WRITE_TOKEN;
+
+/**
+ * Lê o token saneado.
+ *
+ * Colar o valor no painel da Vercel com aspas em volta ou um 
+ no fim é o
+ * erro mais comum, e o @vercel/blob não avisa: ele só devolve "Access denied".
+ * Por isso o token é limpo aqui e passado explicitamente para o put/del, em
+ * vez de deixar a lib ler a variável crua.
+ */
+function lerTokenDoBlob(): string | undefined {
+  const bruto = process.env.BLOB_READ_WRITE_TOKEN;
+  if (!bruto) return undefined;
+
+  const limpo = bruto.trim().replace(/^["']+|["']+$/g, '').trim();
+  return limpo || undefined;
+}
+
+/** Descreve o token sem revelá-lo, para dar para comparar ambientes no log. */
+function descreverToken(token?: string): string {
+  if (!token) return 'ausente';
+
+  const store = /^vercel_blob_rw_([^_]+)_/.exec(token)?.[1];
+  const formatoOk = token.startsWith('vercel_blob_rw_');
+
+  return (
+    `${token.length} chars, store "${store ?? '???'}", ` +
+    `prefixo ${token.slice(0, 15)}…${formatoOk ? '' : ' (FORMATO INESPERADO — deveria começar com vercel_blob_rw_)'}`
+  );
+}
+
+const TOKEN_BLOB = lerTokenDoBlob();
+const TEM_TOKEN_BLOB = !!TOKEN_BLOB;
 
 // Aviso na subida, não na primeira foto: assim o problema aparece no log do
 // deploy em vez de um aluno descobrir no meio do preenchimento do formulário.
@@ -21,6 +53,10 @@ if (NA_VERCEL && !TEM_TOKEN_BLOB) {
       '(Storage → Connect Project) ou defina a variável em Settings → ' +
       'Environment Variables, e REFAÇA O DEPLOY.',
   );
+} else if (NA_VERCEL) {
+  // Registra a forma do token na subida: comparar este log com o do ambiente
+  // local mostra na hora se o valor foi colado errado ou aponta outro store.
+  logger.log(`Vercel Blob configurado — token: ${descreverToken(TOKEN_BLOB)}`);
 }
 
 /**
@@ -43,7 +79,8 @@ function traduzirErroDoBlob(e: any): HttpError {
   ) {
     logger.error(
       `Vercel Blob recusou a credencial (${nome || 'sem nome'}): ${msg}. ` +
-        'Confira BLOB_READ_WRITE_TOKEN no ambiente e refaça o deploy.',
+        `Token em uso: ${descreverToken(TOKEN_BLOB)}. ` +
+        'Compare o store com o do painel; se divergir, a variável aponta para outro Blob store.',
     );
     return new HttpError(
       'Armazenamento de imagens não está configurado no servidor',
@@ -103,6 +140,8 @@ export async function persistUploadedFile(
     const blob = await put(`${prefix}/${Date.now()}-${file.originalname}`, file.buffer, {
       access: 'public',
       contentType: file.mimetype,
+      // Explícito, com o valor já saneado — não deixa a lib ler a env crua.
+      token: TOKEN_BLOB,
     });
 
     return blob.url;
@@ -120,7 +159,7 @@ export async function removeStoredFile(url: string | null | undefined): Promise<
   try {
     if (url.startsWith('http')) {
       const { del } = await import('@vercel/blob');
-      await del(url);
+      await del(url, { token: TOKEN_BLOB });
       return;
     }
 
