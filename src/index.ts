@@ -4,6 +4,7 @@ import 'dotenv/config';
 import express from 'express';
 import { NestFactory } from '@nestjs/core';
 import { ExpressAdapter } from '@nestjs/platform-express';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 
 import { AppModule } from './app.module';
@@ -18,7 +19,16 @@ async function bootstrap() {
   // Fail-fast: sem JWT_SECRET o guard não consegue validar nada.
   getJwtSecret();
 
-  const app = await NestFactory.create(AppModule, new ExpressAdapter(server));
+  const app = await NestFactory.create<NestExpressApplication>(
+    AppModule,
+    new ExpressAdapter(server),
+  );
+
+  // O default do Express é 100 KB, e o sync de formulário com vários itens
+  // passa disso. Foto, porém, vai por multipart em /photos/upload — não é para
+  // caber aqui como base64, por isso o limite segue modesto.
+  app.useBodyParser('json', { limit: '2mb' });
+  app.useBodyParser('urlencoded', { limit: '2mb', extended: true });
 
   // O front roda em outra origem — sem isso o browser bloqueia toda chamada.
   app.enableCors();

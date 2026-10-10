@@ -72,6 +72,58 @@ export class HttpErrorFilter implements ExceptionFilter {
     });
   }
 
+  /** Erros levantados pelo body parser / multer, fora do nosso código. */
+  private resolveErroDeRequisicao(e: any): Resolvido | null {
+    const tipo = String(e?.type ?? '');
+    const nome = String(e?.name ?? '');
+
+    if (tipo === 'entity.too.large' || nome === 'PayloadTooLargeError') {
+      const limite = e?.limit ? `${Math.round(e.limit / 1024)} KB` : 'o limite';
+      return {
+        status: HttpStatus.PAYLOAD_TOO_LARGE,
+        message:
+          `Corpo da requisição maior que ${limite}. ` +
+          'Para enviar imagem, use multipart em POST /photos/upload em vez de base64 no JSON.',
+        codigo: 'CORPO_GRANDE',
+      };
+    }
+
+    return null;
+  }
+
+  /** Mensagens que o Nest já traduziu do multer/parser, em inglês e sem código. */
+  private traduzirMensagemDoNest(texto: string, status: number): Resolvido | null {
+    if (/^File too large$/i.test(texto)) {
+      return {
+        status,
+        message: 'Imagem maior que o limite de 5 MB',
+        codigo: 'IMAGEM_GRANDE',
+      };
+    }
+
+    if (/^Unexpected field$/i.test(texto)) {
+      return {
+        status,
+        message: 'Campo de arquivo inesperado. Envie um único arquivo no campo "photo".',
+        codigo: 'CAMPO_ARQUIVO_INVALIDO',
+      };
+    }
+
+    if (/^Too many (files|parts)$/i.test(texto)) {
+      return { status, message: 'Envie um arquivo por vez', codigo: 'CAMPO_ARQUIVO_INVALIDO' };
+    }
+
+    if (/in JSON at position|Unexpected token.*JSON|Expected property name/i.test(texto)) {
+      return {
+        status: HttpStatus.BAD_REQUEST,
+        message: `JSON inválido no corpo da requisição (${texto})`,
+        codigo: 'JSON_INVALIDO',
+      };
+    }
+
+    return null;
+  }
+
   private resolve(exception: unknown): Resolvido {
     if (exception instanceof HttpError) {
       return {
@@ -88,10 +140,16 @@ export class HttpErrorFilter implements ExceptionFilter {
 
       // O ValidationPipe devolve um array de mensagens, uma por campo.
       const lista = Array.isArray(bruto) ? bruto.map(String) : null;
+      const texto = lista ? lista.join('; ') : String(bruto);
+
+      // O Nest converte os erros do multer e do parser de JSON em HttpException
+      // antes deste filtro, com a mensagem crua em inglês e sem código.
+      const conhecido = this.traduzirMensagemDoNest(texto, exception.getStatus());
+      if (conhecido) return conhecido;
 
       return {
         status: exception.getStatus(),
-        message: lista ? lista.join('; ') : String(bruto),
+        message: texto,
         ...(lista ? { codigo: 'VALIDACAO' } : {}),
       };
     }
@@ -107,6 +165,11 @@ export class HttpErrorFilter implements ExceptionFilter {
         campos: doPrisma.campos,
       };
     }
+
+    // Vem do body parser, antes de qualquer código nosso rodar. Acontece
+    // quando o front manda imagem em base64 dentro do JSON.
+    const daRequisicao = this.resolveErroDeRequisicao(exception);
+    if (daRequisicao) return daRequisicao;
 
     return {
       status: HttpStatus.INTERNAL_SERVER_ERROR,
